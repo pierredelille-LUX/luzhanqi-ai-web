@@ -28,4 +28,10 @@ http://127.0.0.1:8000/
 
 ## 部署
 
-应用可直接部署到 GitHub Pages，发布源为 `main` 分支根目录。
+应用已部署到 GitHub Pages，发布源为 `main` 分支根目录。
+
+公网访问链接：
+
+```text
+https://pierredelille-lux.github.io/luzhanqi-ai-web/
+```
