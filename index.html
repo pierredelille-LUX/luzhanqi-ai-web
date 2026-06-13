@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="中国陆战棋 Web 对弈应用，支持本地双人和中级电脑棋手。"
+    />
+    <title>中国陆战棋 AI 对战</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="tabletop" aria-label="中国陆战棋棋盘">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">陆战棋</p>
+            <h1>中国陆战棋 AI 对战</h1>
+          </div>
+          <div class="turn-card" id="turnCard" aria-live="polite"></div>
+        </header>
+
+        <div class="board-wrap">
+          <div class="file-labels" aria-hidden="true">
+            <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span>
+          </div>
+          <div class="board" id="board" role="grid" aria-label="陆战棋棋盘"></div>
+        </div>
+      </section>
+
+      <aside class="side-panel" aria-label="控制面板">
+        <section class="panel-section controls">
+          <div class="segmented" role="group" aria-label="对弈模式">
+            <button class="mode-btn active" type="button" data-mode="ai">人机</button>
+            <button class="mode-btn" type="button" data-mode="local">人人</button>
+          </div>
+          <div class="control-row">
+            <button class="primary" id="newGameBtn" type="button">新局</button>
+            <button id="randomGameBtn" type="button">随机布阵</button>
+          </div>
+          <div class="control-row">
+            <button id="undoBtn" type="button">撤销</button>
+            <button id="flipBtn" type="button">换视角</button>
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <h2>战况</h2>
+          <div class="score-grid" id="scoreGrid"></div>
+        </section>
+
+        <section class="panel-section">
+          <h2>被俘棋子</h2>
+          <div class="captured" id="capturedPanel"></div>
+        </section>
+
+        <section class="panel-section">
+          <h2>行棋记录</h2>
+          <ol class="move-log" id="moveLog"></ol>
+        </section>
+
+        <section class="panel-section compact-rules">
+          <h2>规则</h2>
+          <p>
+            明棋规则：军衔大吃小，同级同归；炸弹同归；工兵可排雷；军旗或无可行动棋子被拿下即败。
+          </p>
+          <p>
+            铁路可直线远行，工兵可沿铁路转弯。行营内棋子不能被攻击。
+          </p>
+        </section>
+      </aside>
+    </main>
+
+    <script src="game.js"></script>
+  </body>
+</html>
