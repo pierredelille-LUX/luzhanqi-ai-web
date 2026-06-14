@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="中国陆战棋 Web 对弈应用，支持本地双人和中级电脑棋手。"
+      content="中国陆战棋 Web 对弈应用，支持传统暗棋规则、本地双人和中级电脑棋手。"
     />
     <title>中国陆战棋 AI 对战</title>
     <link rel="stylesheet" href="styles.css" />
@@ -45,6 +45,18 @@
           </div>
         </section>
 
+        <section class="panel-section auth-panel">
+          <h2>账号与存档</h2>
+          <div class="auth-status" id="accountStatus"></div>
+          <div class="google-slot" id="googleButton"></div>
+          <div class="control-row">
+            <button id="saveGameBtn" type="button">保存棋局</button>
+            <button id="loadGameBtn" type="button">读取棋局</button>
+          </div>
+          <button class="plain-action" id="signOutBtn" type="button">退出 Google 登录</button>
+          <p class="save-status" id="saveStatus" aria-live="polite"></p>
+        </section>
+
         <section class="panel-section">
           <h2>战况</h2>
           <div class="score-grid" id="scoreGrid"></div>
@@ -63,15 +75,17 @@
         <section class="panel-section compact-rules">
           <h2>规则</h2>
           <p>
-            明棋规则：军衔大吃小，同级同归；炸弹同归；工兵可排雷；军旗或无可行动棋子被拿下即败。
+            传统暗棋规则：只看得见自己的棋子，对手排兵布阵始终隐藏，由程序自动判定战斗胜负。
           </p>
           <p>
-            铁路可直线远行，工兵可沿铁路转弯。行营内棋子不能被攻击。
+            军衔大吃小，同级同归；炸弹同归；工兵可排雷；铁路可直线远行，工兵可沿铁路转弯。
           </p>
         </section>
       </aside>
     </main>
 
+    <script src="config.js"></script>
+    <script src="https://accounts.google.com/gsi/client?hl=zh-CN" async defer></script>
     <script src="game.js"></script>
   </body>
 </html>

@@ -5,8 +5,10 @@
   const COLS = 5;
   const RED = "red";
   const BLUE = "blue";
-  const SIDES = [RED, BLUE];
   const COL_LABELS = ["一", "二", "三", "四", "五"];
+  const GOOGLE_CLIENT_ID = String(window.LUZHANQI_GOOGLE_CLIENT_ID || "").trim();
+  const PROFILE_STORAGE_KEY = "luzhanqi:google-profile:v1";
+  const SAVE_PREFIX = "luzhanqi:saved-game:v2:";
   const DIRECTIONS = [
     [-1, 0],
     [1, 0],
@@ -108,12 +110,20 @@
   const randomGameBtn = document.querySelector("#randomGameBtn");
   const undoBtn = document.querySelector("#undoBtn");
   const flipBtn = document.querySelector("#flipBtn");
+  const accountStatusEl = document.querySelector("#accountStatus");
+  const googleButtonEl = document.querySelector("#googleButton");
+  const signOutBtn = document.querySelector("#signOutBtn");
+  const saveGameBtn = document.querySelector("#saveGameBtn");
+  const loadGameBtn = document.querySelector("#loadGameBtn");
+  const saveStatusEl = document.querySelector("#saveStatus");
 
   let serial = 0;
   let state = createGame({ mode: "ai", random: false });
   let history = [];
   let viewSide = RED;
   let aiTimer = null;
+  let account = loadStoredAccount();
+  let googleInitialized = false;
 
   boardEl.addEventListener("click", onBoardClick);
   newGameBtn.addEventListener("click", () => resetGame(false));
@@ -123,6 +133,9 @@
     viewSide = viewSide === RED ? BLUE : RED;
     render();
   });
+  saveGameBtn.addEventListener("click", saveCurrentGame);
+  loadGameBtn.addEventListener("click", loadSavedGame);
+  signOutBtn.addEventListener("click", signOutGoogle);
   modeButtons.forEach((button) => {
     button.addEventListener("click", () => {
       const nextMode = button.dataset.mode;
@@ -132,8 +145,10 @@
       resetGame(false, nextMode);
     });
   });
+  window.addEventListener("load", initGoogleAuth);
 
   render();
+  renderAccount();
 
   function createGame({ mode, random }) {
     serial = 0;
@@ -155,7 +170,7 @@
       winner: null,
       endReason: "",
       captures: { [RED]: [], [BLUE]: [] },
-      log: ["红方先行"],
+      log: ["传统暗棋：红方先行"],
       lastMove: null,
       aiThinking: false,
       ply: 1,
@@ -168,6 +183,7 @@
     state = createGame({ mode, random });
     modeButtons.forEach((button) => button.classList.toggle("active", button.dataset.mode === mode));
     viewSide = RED;
+    setSaveStatus("");
     render();
   }
 
@@ -236,6 +252,7 @@
       short: spec.short,
       value: spec.value,
       immobile: Boolean(spec.immobile),
+      moved: false,
     };
   }
 
@@ -276,7 +293,7 @@
     state.selected = slot;
     state.legalMoves = moves;
     if (!moves.length && piece) {
-      state.log.unshift(`${sideName(piece.side)} ${piece.label} 暂无合法走法`);
+      state.log.unshift(`${sideName(piece.side)}棋子暂无合法走法`);
     }
     render();
   }
@@ -292,6 +309,7 @@
     applyMove(state, move, { silent: false });
     state.selected = null;
     state.legalMoves = [];
+    syncViewAfterTurnChange();
     render();
     maybeRunAI();
   }
@@ -306,6 +324,7 @@
       if (move && !state.gameOver) {
         pushHistory();
         applyMove(state, move, { silent: false, actor: "ai" });
+        syncViewAfterTurnChange();
       }
       render();
     }, 360);
@@ -321,6 +340,7 @@
     } else {
       state = popHistory();
     }
+    syncViewAfterTurnChange();
     render();
   }
 
@@ -356,25 +376,27 @@
     board[move.from] = null;
 
     if (!defender) {
+      attacker.moved = true;
       board[move.to] = attacker;
-      resultText = `${sideName(attacker.side)} ${attacker.label} ${coord(move.from)}→${coord(move.to)}`;
+      resultText = `${sideName(attacker.side)}棋子 ${coord(move.from)}→${coord(move.to)}`;
     } else {
       const outcome = resolveBattle(attacker, defender);
       flagCaptured = outcome.flagCaptured;
 
       if (outcome.result === "attacker") {
+        attacker.moved = true;
         board[move.to] = attacker;
         capturePiece(game, attacker.side, defender, silent);
-        resultText = `${sideName(attacker.side)} ${attacker.label} ${coord(move.from)}×${coord(move.to)} ${defender.label}`;
+        resultText = battleLogText(attacker, defender, outcome, move);
       } else if (outcome.result === "defender") {
         board[move.to] = defender;
         capturePiece(game, defender.side, attacker, silent);
-        resultText = `${sideName(attacker.side)} ${attacker.label} 进攻 ${defender.label} 失败`;
+        resultText = battleLogText(attacker, defender, outcome, move);
       } else {
         board[move.to] = null;
         capturePiece(game, attacker.side, defender, silent);
         capturePiece(game, defender.side, attacker, silent);
-        resultText = `${attacker.label} 与 ${defender.label} 同归`;
+        resultText = battleLogText(attacker, defender, outcome, move);
       }
     }
 
@@ -409,6 +431,22 @@
   function capturePiece(game, side, piece, silent) {
     if (silent) return;
     game.captures[side].push({ type: piece.type, side: piece.side, label: piece.label, short: piece.short });
+  }
+
+  function battleLogText(attacker, defender, outcome, move) {
+    const attackerText = `${sideName(attacker.side)}棋子`;
+    const defenderText = `${sideName(defender.side)}暗子`;
+    const route = `${coord(move.from)}×${coord(move.to)}`;
+    if (outcome.flagCaptured) {
+      return `${attackerText} ${route} 夺取军旗`;
+    }
+    if (outcome.result === "attacker") {
+      return `${attackerText} ${route}，${sideName(attacker.side)}胜`;
+    }
+    if (outcome.result === "defender") {
+      return `${attackerText} ${route}，${defenderText}守住`;
+    }
+    return `${attackerText} ${route}，双方同归`;
   }
 
   function resolveBattle(attacker, defender) {
@@ -517,156 +555,63 @@
   }
 
   function chooseAIMove(game) {
-    const moves = orderMoves(generateAllMoves(game, BLUE), game).slice(0, 48);
+    const moves = generateAllMoves(game, BLUE);
     if (!moves.length) return null;
 
-    const livingPieces = game.board.filter(Boolean).length;
-    const depth = livingPieces > 36 ? 2 : 3;
-    let alpha = -Infinity;
     let bestScore = -Infinity;
     const candidates = [];
 
     for (const move of moves) {
-      const next = cloneForSearch(game);
-      applyMove(next, move, { silent: true, actor: "ai" });
-      const score = minimax(next, depth - 1, alpha, Infinity, false);
+      const score = hiddenMoveScore(move, game);
       if (score > bestScore + 0.001) {
         bestScore = score;
         candidates.length = 0;
         candidates.push(move);
-      } else if (Math.abs(score - bestScore) < 90) {
+      } else if (Math.abs(score - bestScore) < 55) {
         candidates.push(move);
       }
-      alpha = Math.max(alpha, bestScore);
     }
 
     return candidates[Math.floor(Math.random() * candidates.length)] || moves[0];
   }
 
-  function minimax(game, depth, alpha, beta, maximizing) {
-    if (game.gameOver) {
-      if (game.winner === BLUE) return 1000000 + depth * 1000;
-      if (game.winner === RED) return -1000000 - depth * 1000;
-      return 0;
-    }
-    if (depth === 0) return evaluate(game);
-
-    const side = maximizing ? BLUE : RED;
-    const moves = orderMoves(generateAllMoves(game, side), game).slice(0, depth >= 2 ? 34 : 54);
-    if (!moves.length) return side === BLUE ? -900000 : 900000;
-
-    if (maximizing) {
-      let value = -Infinity;
-      for (const move of moves) {
-        const next = cloneForSearch(game);
-        applyMove(next, move, { silent: true });
-        value = Math.max(value, minimax(next, depth - 1, alpha, beta, false));
-        alpha = Math.max(alpha, value);
-        if (alpha >= beta) break;
-      }
-      return value;
-    }
-
-    let value = Infinity;
-    for (const move of moves) {
-      const next = cloneForSearch(game);
-      applyMove(next, move, { silent: true });
-      value = Math.min(value, minimax(next, depth - 1, alpha, beta, true));
-      beta = Math.min(beta, value);
-      if (alpha >= beta) break;
-    }
-    return value;
-  }
-
-  function evaluate(game) {
-    const redFlag = findPiece(game, RED, "flag");
-    const blueFlag = findPiece(game, BLUE, "flag");
-    if (redFlag === null) return 1000000;
-    if (blueFlag === null) return -1000000;
-
-    let score = 0;
-    for (let slot = 0; slot < game.board.length; slot += 1) {
-      const piece = game.board[slot];
-      if (!piece) continue;
-      const sign = piece.side === BLUE ? 1 : -1;
-      let value = piece.value;
-      value += positionalValue(piece, slot, piece.side === BLUE ? redFlag : blueFlag);
-      if (isCamp(slot)) value += 36;
-      if (isRail(slot) && !piece.immobile) value += piece.type === "engineer" ? 32 : 14;
-      score += sign * value;
-    }
-
-    const blueMobility = generateAllMoves(game, BLUE).length;
-    const redMobility = generateAllMoves(game, RED).length;
-    score += (blueMobility - redMobility) * 4;
-    score += flagPressure(game, BLUE, redFlag) - flagPressure(game, RED, blueFlag);
-    return score;
-  }
-
-  function positionalValue(piece, slot, enemyFlagSlot) {
-    if (piece.immobile) return 0;
-    const { r, c } = rowCol(slot);
-    const flag = rowCol(enemyFlagSlot);
-    const distance = Math.abs(r - flag.r) + Math.abs(c - flag.c);
-    const forward = piece.side === BLUE ? r : ROWS - 1 - r;
-    let value = Math.max(0, 12 - distance) * 7 + forward * 4;
-    if (piece.type === "engineer") value += Math.max(0, 10 - distance) * 5;
-    if (piece.type === "bomb") value += Math.max(0, 9 - distance) * 4;
-    return value;
-  }
-
-  function flagPressure(game, side, enemyFlagSlot) {
-    let pressure = 0;
-    game.board.forEach((piece, slot) => {
-      if (!piece || piece.side !== side || piece.immobile) return;
-      const distance = manhattan(slot, enemyFlagSlot);
-      if (distance <= 3) pressure += piece.type === "engineer" || piece.type === "bomb" ? 70 : 45;
-      if (distance <= 1) pressure += 95;
-    });
-    return pressure;
-  }
-
-  function orderMoves(moves, game) {
-    return [...moves].sort((a, b) => moveScore(b, game) - moveScore(a, game));
-  }
-
-  function moveScore(move, game) {
+  function hiddenMoveScore(move, game) {
     const attacker = game.board[move.from];
-    const defender = game.board[move.to];
+    const target = game.board[move.to];
     if (!attacker) return -Infinity;
-    let score = 0;
-    if (move.rail) score += attacker.type === "engineer" ? 18 : 9;
-    if (isCamp(move.to)) score += 36;
+
     const { r: fromR } = rowCol(move.from);
-    const { r: toR } = rowCol(move.to);
-    score += attacker.side === BLUE ? (toR - fromR) * 7 : (fromR - toR) * 7;
+    const { r: toR, c: toC } = rowCol(move.to);
+    const blueFlag = findPiece(game, BLUE, "flag");
+    const redFlagGuess = nearestSlot(move.to, [index(11, 1), index(11, 3)]);
+    const homeThreat = blueFlag === -1 ? 0 : Math.max(0, 8 - manhattan(move.to, blueFlag)) * 8;
+    const enemyCamp = Math.max(0, 14 - manhattan(move.to, redFlagGuess)) * 6;
 
-    if (defender) {
-      const outcome = resolveBattle(attacker, defender);
-      if (outcome.flagCaptured) return 50000;
-      if (outcome.result === "attacker") score += defender.value + 120;
-      if (outcome.result === "both") score += defender.value - attacker.value * 0.62;
-      if (outcome.result === "defender") score -= attacker.value + 80;
+    let score = Math.random() * 2;
+    score += move.rail ? (attacker.type === "engineer" ? 34 : 14) : 0;
+    score += isCamp(move.to) ? 42 : 0;
+    score += (toR - fromR) * 8;
+    score -= Math.abs(toC - 2) * 2;
+    score += enemyCamp;
+
+    if (!target) {
+      score += attacker.moved ? 10 : 0;
+      score += attacker.type === "engineer" ? 18 : 0;
+      return score;
     }
-    return score + Math.random() * 0.2;
-  }
 
-  function cloneForSearch(game) {
-    return {
-      board: game.board.map((piece) => (piece ? { ...piece } : null)),
-      mode: game.mode,
-      turn: game.turn,
-      selected: null,
-      legalMoves: [],
-      gameOver: game.gameOver,
-      winner: game.winner,
-      endReason: game.endReason,
-      captures: { [RED]: [], [BLUE]: [] },
-      log: [],
-      lastMove: game.lastMove ? { ...game.lastMove } : null,
-      aiThinking: false,
-      ply: game.ply,
-    };
+    const targetMoved = Boolean(target.moved);
+    const targetNearHome = blueFlag === -1 ? 0 : Math.max(0, 5 - manhattan(move.to, blueFlag)) * 38;
+    const uncertainRisk = targetMoved ? 42 : 92;
+    score += 95 + targetNearHome + homeThreat;
+
+    if (attacker.type === "bomb") score += 130;
+    if (attacker.type === "engineer") score += targetMoved ? 30 : 86;
+    if (attacker.rank >= 7 && !targetMoved) score -= uncertainRisk + attacker.value * 0.08;
+    if (attacker.rank >= 7 && targetMoved) score -= 28;
+    if (attacker.rank <= 3 && targetMoved) score += 32;
+    if (attacker.type === "commander" && !targetMoved) score -= 120;
+    return score;
   }
 
   function render() {
@@ -695,22 +640,30 @@
         const legalClass = legal ? ` ${legal.capture ? "attack" : "legal"}` : "";
         const lastClass = last && (last.from === slot || last.to === slot) ? " last-move" : "";
         const terrainTag = isCamp(slot) ? "营" : isHQ(slot) ? "旗" : "";
-        const label = piece ? `${sideName(piece.side)} ${piece.label}` : terrainTag || coord(slot);
+        const visible = piece ? isPieceVisible(piece) : false;
+        const label = piece
+          ? visible
+            ? `${sideName(piece.side)} ${piece.label}`
+            : `${sideName(piece.side)}暗子`
+          : terrainTag || coord(slot);
         return `
           <div class="cell ${terrainClasses}${selected}${legalClass}${lastClass}" data-slot="${slot}" role="gridcell" aria-label="${label}">
             ${terrainTag ? `<span class="terrain-tag">${terrainTag}</span>` : ""}
-            ${piece ? pieceMarkup(piece) : ""}
+            ${piece ? pieceMarkup(piece, visible) : ""}
           </div>
         `;
       })
       .join("");
   }
 
-  function pieceMarkup(piece) {
-    const immobile = piece.immobile ? " immobile" : "";
+  function pieceMarkup(piece, visible) {
+    const hidden = visible ? "" : " hidden";
+    const immobile = visible && piece.immobile ? " immobile" : "";
+    const text = visible ? piece.label : "军棋";
+    const detail = visible ? "" : "<small>暗</small>";
     return `
-      <button class="piece ${piece.side}${immobile}" type="button" aria-label="${sideName(piece.side)} ${piece.label}">
-        <span>${piece.label}</span>
+      <button class="piece ${piece.side}${hidden}${immobile}" type="button" aria-label="${sideName(piece.side)}${visible ? ` ${piece.label}` : " 暗子"}">
+        <span>${text}</span>${detail}
       </button>
     `;
   }
@@ -726,17 +679,10 @@
   function renderPanels() {
     const redPieces = state.board.filter((piece) => piece?.side === RED);
     const bluePieces = state.board.filter((piece) => piece?.side === BLUE);
+    const visible = visibleSide();
     scoreGridEl.innerHTML = `
-      <div class="score-card">
-        <strong>红方</strong>
-        <div class="big">${material(redPieces)}</div>
-        <span>${redPieces.length} 子在盘</span>
-      </div>
-      <div class="score-card">
-        <strong>蓝方</strong>
-        <div class="big">${material(bluePieces)}</div>
-        <span>${bluePieces.length} 子在盘</span>
-      </div>
+      ${scoreCard(RED, redPieces, visible)}
+      ${scoreCard(BLUE, bluePieces, visible)}
     `;
 
     capturedPanelEl.innerHTML = `
@@ -757,8 +703,35 @@
     return `<div><strong>${title}</strong><div class="capture-line">${chips}</div></div>`;
   }
 
+  function scoreCard(side, pieces, visible) {
+    const canSee = state.gameOver || side === visible;
+    return `
+      <div class="score-card">
+        <strong>${sideName(side)}</strong>
+        <div class="big">${canSee ? material(pieces) : "暗"}</div>
+        <span>${pieces.length} 子在盘</span>
+      </div>
+    `;
+  }
+
   function material(pieces) {
     return pieces.reduce((sum, piece) => sum + Math.round(piece.value / 10), 0);
+  }
+
+  function visibleSide() {
+    if (state.gameOver) return null;
+    return state.mode === "local" ? state.turn : RED;
+  }
+
+  function isPieceVisible(piece) {
+    const visible = visibleSide();
+    return state.gameOver || piece.side === visible;
+  }
+
+  function syncViewAfterTurnChange() {
+    if (state.mode === "local") {
+      viewSide = state.turn;
+    }
   }
 
   function terrainClass(slot) {
@@ -807,6 +780,10 @@
     const ar = rowCol(a);
     const br = rowCol(b);
     return Math.abs(ar.r - br.r) + Math.abs(ar.c - br.c);
+  }
+
+  function nearestSlot(from, slots) {
+    return slots.reduce((best, slot) => (manhattan(from, slot) < manhattan(from, best) ? slot : best), slots[0]);
   }
 
   function isCamp(slot) {
@@ -864,6 +841,158 @@
 
   function sample(items) {
     return items[Math.floor(Math.random() * items.length)];
+  }
+
+  function initGoogleAuth() {
+    if (googleInitialized) return;
+    if (!GOOGLE_CLIENT_ID) {
+      googleButtonEl.innerHTML = '<div class="google-disabled">配置 Google Client ID 后启用登录</div>';
+      return;
+    }
+    if (!window.google?.accounts?.id) {
+      window.setTimeout(initGoogleAuth, 350);
+      return;
+    }
+
+    googleInitialized = true;
+    window.google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: handleCredentialResponse,
+      ux_mode: "popup",
+    });
+    window.google.accounts.id.renderButton(googleButtonEl, {
+      theme: "outline",
+      size: "large",
+      text: "signin_with",
+      shape: "rectangular",
+      locale: "zh-CN",
+    });
+  }
+
+  function handleCredentialResponse(response) {
+    const payload = decodeJwt(response.credential);
+    if (!payload?.sub) {
+      setSaveStatus("Google 登录失败：没有收到有效用户 ID。");
+      return;
+    }
+    account = {
+      id: payload.sub,
+      name: payload.name || payload.email || "Google 用户",
+      email: payload.email || "",
+      picture: payload.picture || "",
+    };
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(account));
+    renderAccount();
+    setSaveStatus("已登录 Google，可保存到该账号的本机棋局槽。");
+  }
+
+  function decodeJwt(token) {
+    try {
+      const payload = token.split(".")[1];
+      const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+      const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="));
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      return JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      return null;
+    }
+  }
+
+  function loadStoredAccount() {
+    try {
+      return JSON.parse(localStorage.getItem(PROFILE_STORAGE_KEY)) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function renderAccount() {
+    const label = account ? escapeHTML(account.name) : "本机访客";
+    const detail = account?.email ? escapeHTML(account.email) : "棋局保存在当前浏览器";
+    accountStatusEl.innerHTML = `<strong>${label}</strong><span class="muted">${detail}</span>`;
+    signOutBtn.disabled = !account;
+    loadGameBtn.disabled = !hasSavedGame();
+  }
+
+  function currentSaveKey() {
+    return `${SAVE_PREFIX}${account ? `google:${account.id}` : "guest"}`;
+  }
+
+  function hasSavedGame() {
+    try {
+      return Boolean(localStorage.getItem(currentSaveKey()));
+    } catch {
+      return false;
+    }
+  }
+
+  function saveCurrentGame() {
+    try {
+      const payload = {
+        version: 2,
+        savedAt: new Date().toISOString(),
+        state: snapshotState(state),
+        history: history.map(snapshotState),
+        viewSide,
+      };
+      localStorage.setItem(currentSaveKey(), JSON.stringify(payload));
+      renderAccount();
+      setSaveStatus(`已保存：${formatDateTime(payload.savedAt)}`);
+    } catch {
+      setSaveStatus("保存失败：浏览器存储不可用或空间不足。");
+    }
+  }
+
+  function loadSavedGame() {
+    try {
+      const raw = localStorage.getItem(currentSaveKey());
+      if (!raw) {
+        setSaveStatus("当前账号没有已保存棋局。");
+        return;
+      }
+      const payload = JSON.parse(raw);
+      if (payload.version !== 2 || !payload.state?.board) {
+        setSaveStatus("存档版本不兼容，无法读取。");
+        return;
+      }
+
+      clearTimeout(aiTimer);
+      state = payload.state;
+      state.selected = null;
+      state.legalMoves = [];
+      state.aiThinking = false;
+      history = Array.isArray(payload.history) ? payload.history : [];
+      viewSide = payload.viewSide || RED;
+      modeButtons.forEach((button) => button.classList.toggle("active", button.dataset.mode === state.mode));
+      syncViewAfterTurnChange();
+      render();
+      setSaveStatus(`已读取：${formatDateTime(payload.savedAt)}`);
+      maybeRunAI();
+    } catch {
+      setSaveStatus("读取失败：存档数据损坏。");
+    }
+  }
+
+  function signOutGoogle() {
+    if (window.google?.accounts?.id) {
+      window.google.accounts.id.disableAutoSelect();
+    }
+    account = null;
+    localStorage.removeItem(PROFILE_STORAGE_KEY);
+    renderAccount();
+    setSaveStatus("已退出 Google，当前使用本机访客存档。");
+  }
+
+  function setSaveStatus(message) {
+    saveStatusEl.textContent = message;
+  }
+
+  function formatDateTime(value) {
+    if (!value) return "未知时间";
+    return new Intl.DateTimeFormat("zh-CN", {
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(new Date(value));
   }
 
   function escapeHTML(value) {
